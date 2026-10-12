@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<title>Hiring Copilot 引擎测试</title>
+<style>
+  body { font-family:-apple-system,"PingFang SC",sans-serif; padding:24px; }
+  li.pass { color:#16a34a; } li.fail { color:#dc2626; font-weight:600; }
+  #summary { font-size:1.1rem; font-weight:700; }
+  pre { background:#f8fafc; padding:12px; font-size:12px; }
+</style>
+</head>
+<body>
+<h1>Hiring Copilot 引擎测试</h1>
+<div id="summary"></div>
+<ul id="out"></ul>
+<h2>生成数据概况</h2>
+<pre id="stats"></pre>
+<script src="src/data.js"></script>
+<script src="src/engine.js"></script>
+<script>
+  const results = [];
+  function test(name, fn) {
+    try { fn(); results.push([name, true]); }
+    catch (e) { results.push([name + " — " + e.message, false]); }
+  }
+  function ok(v, msg) { if (!v) throw new Error(msg || "断言失败"); }
+  function eq(a, b) { if (JSON.stringify(a) !== JSON.stringify(b)) throw new Error(`期望 ${JSON.stringify(b)}，实际 ${JSON.stringify(a)}`); }
+  function throws(fn, text) {
+    try { fn(); } catch (e) { if (!e.message.includes(text)) throw new Error(`错误信息不符：${e.message}`); return; }
+    throw new Error("应当抛错");
+  }
+  const T = HireData.TODAY;
+  const J1 = Hire.jobOf("J1");
+  const fake = (over) => ({ id: "X1", job: "J1", name: "测试", gender: "女", age: 28, school: "某大学", degree: "本科", years: 4,
+    city: "上海", relocate: false, notice: 30, source: "内推", applied: "2026-10-01", resume: [], ...over });
+  const inStage = (s, stage) => s.candidates.find((c) => c.status === "active" && Hire.current(c).stage === stage && c.job === "J1");
+
+  test("初筛：每个维度的得分都能追溯到简历原文", () => {
+    const c = fake({ resume: ["负责大模型智能客服从 0 到 1 上线", "主导知识库 RAG 方案选型", "写 PRD 并组织用户访谈"] });
+    const s = Hire.screen(c, J1);
+    const ai = s.attrs.find((a) => a.key === "ai");
+    eq(ai.evidence.length, 2);
+    eq(ai.level, 1);
+    ok(ai.evidence[0].terms.includes("大模型"));
+    s.attrs.forEach((a) => ok(a.level === 0 || a.evidence.length > 0, a.name + " 无证据却得分"));
+  });
+
+  test("初筛：缺少必备能力时只给「待定」，不直接推荐", () => {
+    const s = Hire.screen(fake({ resume: ["SQL 搭建指标体系", "AB 实验评估", "跨部门推动上线", "ToB SaaS 工作台"] }), J1);
+    eq(s.rec, "待定");
+    ok(s.reason.includes("AI 产品落地"));
+  });
+
+  test("初筛：硬性条件不符直接「不推荐」，与分数无关", () => {
+    const strong = ["大模型 Agent 产品", "RAG 知识库", "PRD 需求", "原型 用户访谈", "SQL AB 实验", "数据分析 漏斗", "跨部门推动", "ToB 企业服务"];
+    eq(Hire.screen(fake({ resume: strong }), J1).rec, "推荐推进");
+    const far = Hire.screen(fake({ resume: strong, city: "成都", relocate: false }), J1);
+    eq(far.rec, "不推荐");
+    ok(far.reason.includes("可在上海工作"));
+    eq(Hire.screen(fake({ resume: strong, notice: 90 }), J1).rec, "不推荐");
+  });
+
+  test("评分卡权重可调，归一化后影响排序", () => {
+    const st = { weights: { J1: { ai: 1, data: 0, prd: 0, drive: 0, tob: 0 } } };
+    const w = Hire.weightsFor(st, J1);
+    eq(Math.round(w.ai * 100), 100);
+    const c = fake({ resume: ["大模型 产品", "RAG 方案"] });
+    eq(Hire.screen(c, J1, w).total, 100);
+    ok(Hire.screen(c, J1).total < 100);
+  });
+
+  test("盲筛隐藏姓名、性别、年龄、学校", () => {
+    const v = Hire.blindView(fake({ name: "王小明", school: "清华大学" }), true);
+    ok(!v.name.includes("王小明"));
+    ok(!v.meta.includes("清华") && !v.meta.includes("女") && !v.meta.includes("28"));
+    ok(Hire.blindView(fake({ name: "王小明" }), false).name === "王小明");
+  });
+
+  test("推进：面试反馈没收齐不能进入下一轮", () => {
+    const s = Hire.initState();
+    s.feedback = s.feedback.filter((f) => f.stage !== "phone");
+    const c = inStage(s, "phone");
+    ok(c, "没有在电话面的候选人");
+    throws(() => Hire.advance(s, c.id, T), "反馈还没收齐");
+  });
+
+  test("推进：现场面结论不是「建议录用」不能发 Offer", () => {
+    const s = Hire.initState();
+    const c = inStage(s, "screen") || inStage(s, "applied");
+    while (Hire.current(c).stage !== "onsite") {
+      const st = Hire.current(c).stage;
+      if (st === "phone") s.feedback.push({ cand: c.id, stage: "phone", interviewer: "I2", ratings: {}, overall: 3, note: "x", submitted: T });
+      Hire.advance(s, c.id, T);
+    }
+    ["I1", "I3", "I4"].forEach((iv, i) => s.feedback.push({ cand: c.id, stage: "onsite", interviewer: iv, ratings: {}, overall: i === 1 ? 1 : 3, note: "x", submitted: T }));
+    throws(() => Hire.advance(s, c.id, T), "复盘会");
+  });
+
+  test("推进：Offer 加已入职不能超过招聘名额", () => {
+    const s = Hire.initState();
+    const pass = s.candidates.filter((c) => c.status === "active" && Hire.current(c).stage === "onsite"
+      && Hire.aggregate(Hire.feedbackFor(s, c.id, "onsite")).decision === "建议录用");
+    ok(pass.length, "没有可以发 Offer 的候选人");
+    const job = Hire.jobOf(pass[0].job);
+    const used = () => s.candidates.filter((x) => x.job === job.id && (x.status === "hired" || (x.status === "active" && Hire.current(x).stage === "offer"))).length;
+    while (used() < job.headcount) {
+      const extra = s.candidates.find((x) => x.job === job.id && x.status === "rejected");
+      extra.status = "hired";
+    }
+    throws(() => Hire.advance(s, pass[0].id, T), "名额");
+  });
+
+  test("淘汰必须选原因，已淘汰的不能再操作", () => {
+    const s = Hire.initState();
+    const c = inStage(s, "screen") || inStage(s, "applied");
+    throws(() => Hire.reject(s, c.id, "", T), "淘汰原因");
+    Hire.reject(s, c.id, "经验与岗位不匹配", T);
+    eq(c.status, "rejected");
+    throws(() => Hire.advance(s, c.id, T), "不在流程中");
+  });
+
+  test("反馈校验：必须在面试官名单里、每项打分、写够依据", () => {
+    const s = Hire.initState();
+    s.feedback = s.feedback.filter((f) => f.stage !== "phone");
+    const c = inStage(s, "phone");
+    const ratings = Object.fromEntries(J1.kit.phone.map((q) => [q.attr, 3]));
+    const base = { cand: c.id, stage: "phone", interviewer: "I2", ratings, overall: 3, note: "讲清楚了智能客服项目的指标和取舍过程", submitted: T };
+    throws(() => Hire.submitFeedback(s, { ...base, interviewer: "I3" }), "名单");
+    throws(() => Hire.submitFeedback(s, { ...base, ratings: {} }), "每个考察维度");
+    throws(() => Hire.submitFeedback(s, { ...base, note: "感觉不错" }), "15 字");
+    throws(() => Hire.submitFeedback(s, { ...base, stage: "onsite" }), "不在这个面试阶段");
+    Hire.submitFeedback(s, base);
+    throws(() => Hire.submitFeedback(s, base), "已经提交过");
+  });
+
+  test("提交自己的反馈前看不到别人的，招聘经理始终可见", () => {
+    const s = Hire.initState();
+    const fb = s.feedback.find((f) => f.stage === "onsite" && f.interviewer === "I1");
+    const c = s.candidates.find((x) => x.id === fb.cand);
+    s.feedback = s.feedback.filter((f) => !(f.cand === c.id && f.interviewer === "I3"));
+    ok(!Hire.canSeeOthers(s, c.id, "onsite", "I3"));
+    ok(Hire.canSeeOthers(s, c.id, "onsite", "I1"));
+    ok(Hire.canSeeOthers(s, c.id, "onsite", Hire.HIRING_MANAGER));
+  });
+
+  test("汇总：分歧大或有强烈不推荐时要求复盘会", () => {
+    const f = (o) => ({ overall: o, ratings: {} });
+    eq(Hire.aggregate([f(3), f(4), f(3)]).decision, "建议录用");
+    eq(Hire.aggregate([f(2), f(3), f(2)]).decision, "建议不通过");
+    eq(Hire.aggregate([f(4), f(2), f(3)]).decision, "需要复盘会");
+    eq(Hire.aggregate([f(1), f(2), f(2)]).decision, "需要复盘会");
+  });
+
+  test("分析：漏斗逐级不增，面试官偏差被识别", () => {
+    const s = Hire.initState();
+    const a = Hire.analytics(s);
+    a.funnel.slice(1).forEach((f, i) => ok(f.n <= a.funnel[i].n, "漏斗递增"));
+    const cal = Object.fromEntries(a.interviewers.map((x) => [x.id, x.calibration]));
+    eq(cal.I2, "偏宽松");
+    eq(cal.I3, "偏严格");
+  });
+
+  test("分析：初筛高分档的现场面通过率高于低分档", () => {
+    const b = Hire.analytics(Hire.initState()).bins.filter((x) => x.passRate != null);
+    ok(b.length >= 2, "可比较的分档不足");
+    ok(b[b.length - 1].passRate > b[0].passRate, JSON.stringify(b));
+  });
+
+  test("拒信不写具体淘汰原因，Offer 模板带岗位名", () => {
+    const c = fake({ name: "王小明" });
+    const r = Hire.message("reject", c);
+    ok(r.includes("王小明") && !r.includes("不匹配") && !r.includes("不足"));
+    ok(Hire.message("offer", c).includes("AI 产品经理"));
+  });
+
+  const passed = results.filter((r) => r[1]).length;
+  document.getElementById("summary").textContent = `${passed}/${results.length} passed`;
+  document.title = `${passed}/${results.length} passed`;
+  document.getElementById("out").innerHTML = results.map(([n, p]) => `<li class="${p ? "pass" : "fail"}">${p ? "✓" : "✕"} ${n}</li>`).join("");
+
+  const s = Hire.initState();
+  const lines = [];
+  HireData.JOBS.forEach((j) => {
+    const cs = s.candidates.filter((c) => c.job === j.id);
+    const by = {};
+    cs.forEach((c) => { const k = Hire.current(c).stage + "/" + c.status; by[k] = (by[k] || 0) + 1; });
+    const a = Hire.analytics(s, j.id);
+    lines.push(`${j.title}: ${cs.length} 人 ${JSON.stringify(by)}`);
+    lines.push(`  漏斗 ${a.funnel.map((f) => f.n).join(" → ")}  bins ${JSON.stringify(a.bins)}`);
+    lines.push(`  面试官 ${a.interviewers.map((x) => `${x.name} n=${x.n} avg=${x.avg.toFixed(2)} ${x.calibration}`).join(" | ")}`);
+    lines.push(`  原因 ${JSON.stringify(a.reasons)}  超时 ${Hire.slaBreaches(s, HireData.TODAY).filter((x) => x.cand.job === j.id).length}`);
+    lines.push(`  推荐分布 ${JSON.stringify(cs.reduce((m, c) => { const r = Hire.screen(c, j).rec; m[r] = (m[r] || 0) + 1; return m; }, {}))}`);
+  });
+  lines.push(`待评：${HireData.INTERVIEWERS.map((i) => i.name + " " + s.candidates.filter((c) => c.status === "active" && (Hire.PANEL[Hire.current(c).stage] || []).includes(i.id) && !Hire.feedbackFor(s, c.id, Hire.current(c).stage).some((f) => f.interviewer === i.id)).length).join(" · ")}`);
+  document.getElementById("stats").textContent = lines.join("\n");
+</script>
+</body>
+</html>

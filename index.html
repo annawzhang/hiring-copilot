@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Hiring Copilot · 结构化招聘助手</title>
+<link rel="stylesheet" href="src/style.css" />
+</head>
+<body>
+<header class="top">
+  <div class="brand"><strong>Hiring Copilot</strong><span>结构化招聘助手</span><span class="badge">虚构候选人，数据存在本机浏览器</span></div>
+  <nav id="tabs">
+    <button data-tab="pipeline" class="on">候选人</button>
+    <button data-tab="interviews">我的面试</button>
+    <button data-tab="scorecard">职位与评分卡</button>
+    <button data-tab="analytics">招聘分析</button>
+  </nav>
+  <div class="ctrl">
+    <select id="job"></select>
+    <label class="switch"><input type="checkbox" id="blind" /> 盲筛</label>
+    <select id="me" title="以哪位面试官的身份操作"></select>
+    <button id="reset" class="ghost">重置</button>
+  </div>
+</header>
+
+<main>
+  <section id="p-pipeline" class="page">
+    <div id="sla" class="sla"></div>
+    <div class="board-wrap">
+      <div id="board" class="board"></div>
+      <aside id="detail" class="card detail"></aside>
+    </div>
+  </section>
+  <section id="p-interviews" class="page" hidden></section>
+  <section id="p-scorecard" class="page" hidden></section>
+  <section id="p-analytics" class="page" hidden></section>
+</main>
+
+<script src="src/data.js"></script>
+<script src="src/engine.js"></script>
+<script src="src/app.js"></script>
+</body>
+</html>
