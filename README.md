@@ -2,6 +2,11 @@
 
 **参考 Greenhouse、Ashby、Lever 的结构化招聘方法做的招聘工作台：评分卡驱动初筛，每一分都能指到简历原文；面试官按工具包独立打分，提交前看不到别人的评价；数据再反过来检验评分卡和面试官准不准。**
 
+
+> **Copyright © 2026 张文婧 (Anna Zhang)** · [MIT License](./LICENSE) · [github.com/annawzhang](https://github.com/annawzhang)  
+> 欢迎学习与面试查阅；保留版权与许可声明。**禁止删除作者信息后冒充本人作品二次发表。** 公开内容为虚构/脱敏演示数据。
+
+
 [在线体验](https://annawzhang.github.io/hiring-copilot/) · [浏览器内测试](https://annawzhang.github.io/hiring-copilot/tests.html) · 原生 JavaScript，无依赖、无构建
 
 > 职位、候选人、面试官均为虚构；数据保存在你自己的浏览器（localStorage），右上角「重置」可恢复初始状态。
